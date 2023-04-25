@@ -23,8 +23,8 @@ class SemEvalDataset(Dataset):
         self.e2_start = "<e2>"
         self.e2_end = "</e2>"
 
-        self.sentences, self.sentence_tokens, self.labels = self._get_data(path)
-        self.adj_matrices = deps.generate_matrices(self.sentences, nlp)
+        self.nlp = nlp
+        self.sentences, self.labels, self.adj_matrices = self._get_data(path)
 
         # only initialize vocab for training set
         if vocab is not None:
@@ -36,36 +36,37 @@ class SemEvalDataset(Dataset):
             self.vocab.set_default_index(self.vocab[self.unk])
 
     def _get_data(self, path):
-        sentences: list[str] = []
-        sentence_tokens: list[list[str]] = []
+        sentences: list[list[str]] = []
         labels: list[str] = []
+        adj_matrices: list[torch.Tensor] = []
+
         with open(path, 'r', encoding='utf8') as f:
             for line in DictReader(f, fieldnames=self.columns, delimiter="\t"):
-                # sentences with entity at index 0 start with a space
-                sentence = line["sentence"].strip()
-                tokens = sentence.split(" ")
-                label = line["relation"]
-
                 # to skip all examples with class "Other", since it's common
                 # if label == "Other":
                 #     continue
 
-                sentences.append(sentence)
-                sentence_tokens.append(tokens)
-                labels.append(label)
+                doc = self.nlp(line["sentence"])
 
-        return sentences, sentence_tokens, labels
+                sentence = [token.text for token in doc]
+                label = line["relation"]
+                adj_matrix = deps.generate_matrix(doc)
+
+                sentences.append(sentence)
+                labels.append(label)
+                adj_matrices.append(adj_matrix)
+
+        return sentences, labels, adj_matrices
 
     @property
     def tokens(self):
-        for tokens in self.sentence_tokens:
-            yield tokens
+        return iter(self.sentences)
 
     def __len__(self):
         return len(self.sentences)
 
     def __getitem__(self, idx):
-        x = torch.tensor(self.vocab(self.sentence_tokens[idx]))
+        x = torch.tensor(self.vocab(self.sentences[idx]))
         y = torch.tensor(self.label_map[self.labels[idx]])
         adj_matrix = self.adj_matrices[idx]
         return x, y, adj_matrix
