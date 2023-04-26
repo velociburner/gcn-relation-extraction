@@ -1,4 +1,5 @@
 from csv import DictReader
+from dataclasses import dataclass
 from typing import Iterable
 
 import torch
@@ -8,6 +9,15 @@ from torch.utils.data import Dataset
 from torchtext.vocab import build_vocab_from_iterator
 
 import deps
+
+
+@dataclass
+class SemEvalExample:
+    sentence: torch.Tensor
+    label: torch.Tensor
+    e1: int
+    e2: int
+    adj_matrix: torch.Tensor
 
 
 class SemEvalDataset(Dataset):
@@ -24,7 +34,7 @@ class SemEvalDataset(Dataset):
         self.e2_end = "</e2>"
 
         self.nlp = nlp
-        self.sentences, self.labels, self.adj_matrices = self._get_data(path)
+        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data(path)
 
         # only initialize vocab for training set
         if vocab is not None:
@@ -38,6 +48,7 @@ class SemEvalDataset(Dataset):
     def _get_data(self, path):
         sentences: list[list[str]] = []
         labels: list[str] = []
+        entities: list[tuple[int, int]] = []
         adj_matrices: list[torch.Tensor] = []
 
         with open(path, 'r', encoding='utf8') as f:
@@ -50,13 +61,15 @@ class SemEvalDataset(Dataset):
 
                 sentence = [token.text for token in doc]
                 label = line["relation"]
+                entity = int(line["e1"]), int(line["e2"])
                 adj_matrix = deps.generate_matrix(doc)
 
                 sentences.append(sentence)
                 labels.append(label)
+                entities.append(entity)
                 adj_matrices.append(adj_matrix)
 
-        return sentences, labels, adj_matrices
+        return sentences, labels, entities, adj_matrices
 
     @property
     def tokens(self):
@@ -66,28 +79,31 @@ class SemEvalDataset(Dataset):
         return len(self.sentences)
 
     def __getitem__(self, idx):
-        x = torch.tensor(self.vocab(self.sentences[idx]))
-        y = torch.tensor(self.label_map[self.labels[idx]])
+        sentence = torch.tensor(self.vocab(self.sentences[idx]))
+        label = torch.tensor(self.label_map[self.labels[idx]])
+        e1 = self.entities[idx][0]
+        e2 = self.entities[idx][1]
         adj_matrix = self.adj_matrices[idx]
-        return x, y, adj_matrix
+        return SemEvalExample(sentence, label, e1, e2, adj_matrix)
 
 
-def collate_fn(examples: Iterable[tuple], padding_value: float = 0.):
+def collate_fn(examples: Iterable[SemEvalExample], padding_value: float = 0.):
     """Function used as collate_fn for PyTorch Dataloaders. It simply pads each
     sequence to the longest sequence length in the batch and returns it, along
     with a tensor of labels and padded adjacency matrix of dependency arcs."""
-    token_indices = nn.utils.rnn.pad_sequence(
-        [example[0] for example in examples],
+    sentences = nn.utils.rnn.pad_sequence(
+        [example.sentence for example in examples],
         batch_first=True,
         padding_value=padding_value
     )
-    labels = torch.tensor([example[1] for example in examples])
-
-    adj_matrices = [example[2] for example in examples]
-    max_size = max([matrix.size()[0] for matrix in adj_matrices])
+    labels = torch.tensor([example.label for example in examples])
+    e1s = torch.tensor([example.e1 for example in examples])
+    e2s = torch.tensor([example.e2 for example in examples])
+    adj_matrices = [example.adj_matrix for example in examples]
 
     # pad each adjacency matrix to the size of the largest one
     # each matrix is padded along both dimensions and remains a square matrix
+    max_size = max([matrix.size()[0] for matrix in adj_matrices])
     padded_matrices = torch.stack([
         F.pad(
             matrix,
@@ -97,4 +113,4 @@ def collate_fn(examples: Iterable[tuple], padding_value: float = 0.):
         for matrix in adj_matrices
     ])
 
-    return token_indices, labels, padded_matrices
+    return sentences, labels, e1s, e2s, padded_matrices
