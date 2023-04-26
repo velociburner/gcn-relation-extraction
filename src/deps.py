@@ -1,23 +1,31 @@
 import re
 import torch
 
+from spacy.language import Language
 from spacy.tokens import Doc, Token
 
 
 class WhitespaceTokenizer:
-    """Custom spaCy tokenizer that just tokenizes periods and splits on
-    spaces."""
+    """Custom spaCy tokenizer that just tokenizes periods and commans and then
+    splits on spaces."""
 
     def __init__(self, vocab):
         self.vocab = vocab
 
     def __call__(self, text):
         # strip surrounding whitespace and tokenize sentence final period
-        text = re.sub(r"(.+)\.$", r"\1 .", text.strip())
+        text = re.sub(r"(\w+)(\.|\,)", r"\1 \2", text.strip())
         words = text.split(" ")
         spaces = [True] * len(words)
         spaces[-1] = False
         return Doc(self.vocab, words=words, spaces=spaces)
+
+
+@Language.component("simple_sentencizer")
+def simple_sentencizer(doc: Doc):
+    for token in doc:
+        token.is_sent_start = token.i == 0
+    return doc
 
 
 def generate_matrix(doc: Doc) -> torch.Tensor:
