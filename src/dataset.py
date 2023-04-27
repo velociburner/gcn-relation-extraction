@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 import torch.nn as nn
@@ -41,7 +41,10 @@ class SemEvalDataset(Dataset):
             )
             self.vocab.set_default_index(self.vocab[self.unk])
 
-    def _get_data(self, start, end):
+    def _get_data(self, start: int, end: int):
+        """Loads the sentences and labels from the SemEval dataset and
+        calculates the entity indices and adjacency matrices for each
+        example."""
         data = load_dataset(self.name, split=self.split)[start: end]
 
         sentences: list[list[str]] = []
@@ -60,31 +63,35 @@ class SemEvalDataset(Dataset):
             doc = self.nlp(clean_text)
 
             tokens: list[str] = [token.text for token in doc]
-            entity_indices: list[tuple[int, int]] = []
-
-            for match in matches:
-                entity_tokens = match.split()
-                start_idx = -1
-                for i, token in enumerate(tokens):
-                    if tokens[i: i + len(entity_tokens)] == entity_tokens:
-                        start_idx = i
-                        break
-                try:
-                    # make sure we found the entity span
-                    assert start_idx >= 0
-                    end_idx = start_idx + len(entity_tokens) - 1
-                    entity_indices.append((start_idx, end_idx))
-                except AssertionError as e:
-                    print(sentence, match, matches)
-                    raise e
-
+            entity_idxs = self._get_entity_idxs(tokens, matches)
             adj_matrix = deps.generate_matrix(doc)
 
             sentences.append(tokens)
-            entities.append(entity_indices)
+            entities.append(entity_idxs)
             adj_matrices.append(adj_matrix)
 
         return sentences, labels, entities, adj_matrices
+
+    def _get_entity_idxs(self, tokens: list[str], matches: list[Any]):
+        """Calculates the start and end indices of each entity in the list of
+        matches."""
+        entity_idxs: list[tuple[int, int]] = []
+
+        for match in matches:
+            entity_tokens = match.split()
+            start_idx = -1
+
+            for i, token in enumerate(tokens):
+                if tokens[i: i + len(entity_tokens)] == entity_tokens:
+                    start_idx = i
+                    break
+
+            # make sure we found the entity span
+            assert start_idx >= 0
+            end_idx = start_idx + len(entity_tokens) - 1
+            entity_idxs.append((start_idx, end_idx))
+
+        return entity_idxs
 
     @property
     def tokens(self):
