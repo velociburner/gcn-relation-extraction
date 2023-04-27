@@ -44,8 +44,10 @@ def generate_matrix(doc: Doc) -> torch.Tensor:
 
 def _tree_to_matrix(node: Token, adj_matrix: torch.Tensor):
     """Traverses a dependency tree and adds a 1 to the adjacency matrix in each
-    position corresponding to a dependency arc."""
+    position corresponding to a dependency arc. The dependencies are treated as
+    undirected edges, so the resulting adjacency matrix is symmetric."""
     adj_matrix[node.head.i, node.i] = 1
+    adj_matrix[node.i, node.head.i] = 1
     if node.n_lefts > 0:
         for child in node.lefts:
             _tree_to_matrix(child, adj_matrix)
