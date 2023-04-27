@@ -114,30 +114,32 @@ class GCNClassifier(nn.Module):
         return logits
 
     def pool_cat(self, gcn_hidden, e1s, e2s):
-        """Obtains the hidden vectors for each entity and concatenates them
+        """Pools the hidden vectors for each entity and concatenates them
         with the pooled hidden representation for the entire sentence."""
-        # (batch_size) -> (batch_size, 1, 1)
-        e1s = e1s.unsqueeze(-1).unsqueeze(-1)
-        e2s = e2s.unsqueeze(-1).unsqueeze(-1)
-
         gcn_hidden_dim = gcn_hidden.size()[-1]
-        # (batch_size, 1, 1) -> (batch_size, 1, gcn_hidden_dim)
-        e1_idxs = e1s.repeat(1, 1, gcn_hidden_dim)
-        e2_idxs = e2s.repeat(1, 1, gcn_hidden_dim)
 
-        # (batch_size, 1, gcn_hidden_dim)
-        hidden_subj = torch.gather(gcn_hidden, 1, e1_idxs)
-        hidden_obj = torch.gather(gcn_hidden, 1, e2_idxs)
-
-        # (batch_size, gcn_hidden_dim)
-        hidden_subj = hidden_subj.squeeze(1)
-        hidden_obj = hidden_obj.squeeze(1)
-
+        # swap sequence and hidden dimensions to pool over final dimension
         # (batch_size, seq_len, gcn_hidden_dim) -> (batch_size, gcn_hidden_dim, seq_len)
-        gcn_output = gcn_hidden.transpose(1, 2)
+        gcn_hidden = gcn_hidden.transpose(1, 2)
 
+        # (batch_size, 2) -> (batch_size, 1, 2)
+        e1s = e1s.unsqueeze(1)
+        e2s = e2s.unsqueeze(1)
+
+        # (batch_size, 1, 2) -> (batch_size, gcn_hidden_dim, 2)
+        e1_idxs = e1s.expand(-1, gcn_hidden_dim, -1)
+        e2_idxs = e2s.expand(-1, gcn_hidden_dim, -1)
+
+        # start and end vectors for each entity span
+        # (batch_size, gcn_hidden_dim, 2)
+        hidden_subj = torch.gather(gcn_hidden, -1, e1_idxs)
+        hidden_obj = torch.gather(gcn_hidden, -1, e2_idxs)
+
+        # pool over sequence dimension
         # (batch_size, gcn_hidden_dim)
-        hidden_sent = self.pool(gcn_output).squeeze(-1)
+        hidden_subj = self.pool(hidden_subj).squeeze(-1)
+        hidden_obj = self.pool(hidden_obj).squeeze(-1)
+        hidden_sent = self.pool(gcn_hidden).squeeze(-1)
 
         # (batch_size, gcn_hidden_dim * 3)
         hidden_final = torch.cat([hidden_subj, hidden_sent, hidden_obj], dim=1)
