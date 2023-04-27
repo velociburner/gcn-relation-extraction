@@ -19,15 +19,19 @@ class GCNLayer(nn.Module):
         self.layer = nn.Linear(input_dim, output_dim)
 
     def forward(self, layer_inputs, adj_matrices):
-        """Weights the previous hidden state by the adjacency matrix and then
-        runs that through the corresponding linear layer, taking into account
-        the addition of self loops in the graph."""
-        activations = self.layer(torch.bmm(adj_matrices, layer_inputs))
-        self_loop = self.layer(layer_inputs)
+        """Runs the previous hidden states through the corresponding linear
+        layer, applies a graph convolution using the adjacency matrices, and
+        adds that to the hidden outputs for self loops, all weighted by the
+        degree of each graph node."""
+
         # take the sum of each token's connections and add 1 for self loops
         # (batch_size, seq_len, seq_len) -> (batch_size, seq_len, 1)
         token_degrees = adj_matrices.sum(-1).unsqueeze(-1) + 1
-        layer_outputs = (activations + self_loop) / token_degrees
+
+        # (batch_size, seq_len, gcn_hidden_dim)
+        hidden_outputs = self.layer(layer_inputs)
+        convolution = torch.bmm(adj_matrices, hidden_outputs)
+        layer_outputs = (convolution + hidden_outputs) / token_degrees
 
         return layer_outputs
 
