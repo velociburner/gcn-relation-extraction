@@ -15,7 +15,7 @@ class WhitespaceTokenizer:
     def __call__(self, text):
         # strip surrounding whitespace and tokenize sentence final period
         text = re.sub(r"(\w+)(\.|\,)", r"\1 \2", text.strip())
-        words = text.split(" ")
+        words = text.split()
         spaces = [True] * len(words)
         spaces[-1] = False
         return Doc(self.vocab, words=words, spaces=spaces)

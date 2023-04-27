@@ -1,10 +1,11 @@
-from csv import DictReader
+import re
 from dataclasses import dataclass
 from typing import Iterable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from datasets import load_dataset
 from torch.utils.data import Dataset
 from torchtext.vocab import build_vocab_from_iterator
 
@@ -14,27 +15,22 @@ import deps
 @dataclass
 class SemEvalExample:
     sentence: torch.Tensor
-    label: torch.Tensor
-    e1: int
-    e2: int
+    label: int
+    e1: tuple[int, int]
+    e2: tuple[int, int]
     adj_matrix: torch.Tensor
 
 
 class SemEvalDataset(Dataset):
 
-    def __init__(self, path, labels, nlp, vocab=None):
-        self.columns = ["relation", "e1", "e2", "sentence"]
-        self.label_map = {label: i for i, label in enumerate(labels)}
+    def __init__(self, nlp, start, end, split="train", vocab=None):
+        self.name = "sem_eval_2010_task_8"
+        self.nlp = nlp
+        self.split = split
+        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data(start, end)
+
         self.pad = "<pad>"
         self.unk = "<unk>"
-
-        self.e1_start = "<e1>"
-        self.e1_end = "</e1>"
-        self.e2_start = "<e2>"
-        self.e2_end = "</e2>"
-
-        self.nlp = nlp
-        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data(path)
 
         # only initialize vocab for training set
         if vocab is not None:
@@ -45,29 +41,48 @@ class SemEvalDataset(Dataset):
             )
             self.vocab.set_default_index(self.vocab[self.unk])
 
-    def _get_data(self, path):
+    def _get_data(self, start, end):
+        data = load_dataset(self.name, split=self.split)[start: end]
+
         sentences: list[list[str]] = []
-        labels: list[str] = []
+        labels: list[int] = data['relation']
         entities: list[tuple[int, int]] = []
         adj_matrices: list[torch.Tensor] = []
 
-        with open(path, 'r', encoding='utf8') as f:
-            for line in DictReader(f, fieldnames=self.columns, delimiter="\t"):
-                # to skip all examples with class "Other", since it's common
-                # if label == "Other":
-                #     continue
+        # span surrounded by an opening and closing entity tag
+        pattern = re.compile(r'<e\d>(.*?)<\/e\d>')
 
-                doc = self.nlp(line["sentence"])
+        for sentence in data['sentence']:
+            # filter out entity tags
+            matches = re.findall(pattern, sentence)
+            clean_text = re.sub(pattern, r' \1 ', sentence)
 
-                sentence = [token.text for token in doc]
-                label = line["relation"]
-                entity = int(line["e1"]), int(line["e2"])
-                adj_matrix = deps.generate_matrix(doc)
+            doc = self.nlp(clean_text)
 
-                sentences.append(sentence)
-                labels.append(label)
-                entities.append(entity)
-                adj_matrices.append(adj_matrix)
+            tokens: list[str] = [token.text for token in doc]
+            entity_indices: list[tuple[int, int]] = []
+
+            for match in matches:
+                entity_tokens = match.split()
+                start_idx = -1
+                for i, token in enumerate(tokens):
+                    if tokens[i: i + len(entity_tokens)] == entity_tokens:
+                        start_idx = i
+                        break
+                try:
+                    # make sure we found the entity span
+                    assert start_idx >= 0
+                    end_idx = start_idx + len(entity_tokens) - 1
+                    entity_indices.append((start_idx, end_idx))
+                except AssertionError as e:
+                    print(sentence, match, matches)
+                    raise e
+
+            adj_matrix = deps.generate_matrix(doc)
+
+            sentences.append(tokens)
+            entities.append(entity_indices)
+            adj_matrices.append(adj_matrix)
 
         return sentences, labels, entities, adj_matrices
 
@@ -80,7 +95,7 @@ class SemEvalDataset(Dataset):
 
     def __getitem__(self, idx):
         sentence = torch.tensor(self.vocab(self.sentences[idx]))
-        label = torch.tensor(self.label_map[self.labels[idx]])
+        label = self.labels[idx]
         e1 = self.entities[idx][0]
         e2 = self.entities[idx][1]
         adj_matrix = self.adj_matrices[idx]
