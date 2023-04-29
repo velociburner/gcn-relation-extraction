@@ -109,30 +109,41 @@ class SemEvalDataset(Dataset):
         return SemEvalExample(sentence, label, e1, e2, adj_matrix)
 
 
-def collate_fn(examples: Iterable[SemEvalExample], padding_value: float = 0.):
-    """Function used as collate_fn for PyTorch Dataloaders. It simply pads each
+class CollateSemEval:
+    """Class used as collate_fn for PyTorch Dataloaders. It simply pads each
     sequence to the longest sequence length in the batch and returns it, along
     with a tensor of labels and padded adjacency matrix of dependency arcs."""
-    sentences = nn.utils.rnn.pad_sequence(
-        [example.sentence for example in examples],
-        batch_first=True,
-        padding_value=padding_value
-    )
-    labels = torch.tensor([example.label for example in examples])
-    e1s = torch.tensor([example.e1 for example in examples])
-    e2s = torch.tensor([example.e2 for example in examples])
-    adj_matrices = [example.adj_matrix for example in examples]
 
-    # pad each adjacency matrix to the size of the largest one
-    # each matrix is padded along both dimensions and remains a square matrix
-    max_size = max([matrix.size()[0] for matrix in adj_matrices])
-    padded_matrices = torch.stack([
-        F.pad(
-            matrix,
-            (0, max_size - matrix.size()[1], 0, max_size - matrix.size()[0]),
-            value=padding_value
+    def __init__(self, device: str, padding_value: float = 0.):
+        self.device = device
+        self.padding_value = padding_value
+
+    def __call__(self, examples: Iterable[SemEvalExample]):
+        sentences = nn.utils.rnn.pad_sequence(
+            [example.sentence for example in examples],
+            batch_first=True,
+            padding_value=self.padding_value
         )
-        for matrix in adj_matrices
-    ])
+        labels = torch.tensor([example.label for example in examples])
+        e1s = torch.tensor([example.e1 for example in examples])
+        e2s = torch.tensor([example.e2 for example in examples])
+        adj_matrices = [example.adj_matrix for example in examples]
 
-    return sentences, labels, e1s, e2s, padded_matrices
+        # pad each adjacency matrix to the size of the largest one
+        # each matrix is padded along both dimensions and remains a square matrix
+        max_size = max([matrix.size()[0] for matrix in adj_matrices])
+        padded_matrices = torch.stack([
+            F.pad(
+                matrix,
+                (0, max_size - matrix.size()[1], 0, max_size - matrix.size()[0]),
+                value=self.padding_value
+            )
+            for matrix in adj_matrices
+        ])
+
+        return (
+            sentences.to(self.device),
+            labels.to(self.device),
+            e1s.to(self.device), e2s.to(self.device),
+            padded_matrices.to(self.device)
+        )
