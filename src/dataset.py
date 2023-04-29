@@ -23,11 +23,11 @@ class SemEvalExample:
 
 class SemEvalDataset(Dataset):
 
-    def __init__(self, nlp, start, end, split="train", vocab=None):
+    def __init__(self, nlp, split="train", vocab=None):
         self.name = "sem_eval_2010_task_8"
         self.nlp = nlp
         self.split = split
-        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data(start, end)
+        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data()
 
         self.pad = "<pad>"
         self.unk = "<unk>"
@@ -41,11 +41,11 @@ class SemEvalDataset(Dataset):
             )
             self.vocab.set_default_index(self.vocab[self.unk])
 
-    def _get_data(self, start: int, end: int):
+    def _get_data(self):
         """Loads the sentences and labels from the SemEval dataset and
         calculates the entity indices and adjacency matrices for each
         example."""
-        data = load_dataset(self.name, split=self.split)[start: end]
+        data = load_dataset(self.name, split=self.split)
 
         sentences: list[list[str]] = []
         labels: list[int] = data['relation']
