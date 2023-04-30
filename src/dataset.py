@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from torchtext.vocab import build_vocab_from_iterator
+from tqdm import tqdm
 
 import deps
 
@@ -55,7 +56,7 @@ class SemEvalDataset(Dataset):
         # span surrounded by an opening and closing entity tag
         pattern = re.compile(r'<e\d>(.*?)<\/e\d>')
 
-        for sentence in data['sentence']:
+        for sentence in tqdm(data['sentence']):
             # filter out entity tags
             matches = re.findall(pattern, sentence)
             clean_text = re.sub(pattern, r' \1 ', sentence)
