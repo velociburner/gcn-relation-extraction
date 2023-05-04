@@ -91,12 +91,14 @@ class GCNClassifier(nn.Module):
         if pretrained is not None:
             self.embedding = from_pretrained(pretrained, vocab)
 
-    def forward(self, sentences, adj_matrices, e1s, e2s):
+    def forward(self, inputs):
         """Obtains embeddings, runs through an LSTM, the GCN layers, and a
         final projection layer.
 
         See https://aclanthology.org/D18-1244.pdf for details (pp. 2206-2208).
         """
+        sentences, e1s, e2s, adj_matrices = inputs
+
         # (batch_size, seq_len, embed_dim)
         embedding = self.embedding(sentences)
 

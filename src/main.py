@@ -1,3 +1,5 @@
+import warnings
+
 import click
 import matplotlib.pyplot as plt
 import numpy as np
@@ -5,13 +7,19 @@ import spacy
 import torch
 import torch.nn as nn
 
-from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, classification_report
-from torch.utils.data import DataLoader, Subset
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report
+from sklearn.model_selection import cross_validate
+from skorch import NeuralNetClassifier
+from skorch.callbacks import GradientNormClipping
 from torchtext.vocab import GloVe, pretrained_aliases
 
 import deps
 from dataset import CollateSemEval, SemEvalDataset
 from model import GCNClassifier
+
+
+# ignore sklearn warnings when members of the least populated class < n_splits
+warnings.filterwarnings(action='ignore', category=UserWarning)
 
 
 def get_parser(model_name="en_core_web_sm"):
@@ -28,67 +36,29 @@ def get_parser(model_name="en_core_web_sm"):
     return nlp
 
 
-def get_data_loaders(train_data, dev_data, test_data, batch_size, collate_fn):
-    """Creates the DataLoader objects for each data split."""
-    train_loader = DataLoader(
-        train_data,
-        batch_size=batch_size,
-        collate_fn=collate_fn
-    )
-    dev_loader = DataLoader(
-        dev_data,
-        batch_size=batch_size,
-        collate_fn=collate_fn
-    )
-    test_loader = DataLoader(
-        test_data,
-        batch_size=batch_size,
-        collate_fn=collate_fn
-    )
+def run_model(net: NeuralNetClassifier, data: SemEvalDataset, num_folds: int):
+    """Fits a model on the training data using k-fold cross-validation and
+    returns the best estimator."""
+    print(f"Running {num_folds}-fold cross-validation")
+    print("==================================")
 
-    return train_loader, dev_loader, test_loader
+    labels = np.array(data.labels)
+    scores = cross_validate(net, data, y=labels, cv=num_folds, return_estimator=True)
+
+    test_scores = scores['test_score']
+    print(f"Average accuracy on dev set: {np.mean(test_scores)}")
+    best_fold = np.argmax(test_scores)
+
+    return scores['estimator'][best_fold]
 
 
-def train(model, train_loader, dev_loader, epochs, lr, clip):
-    """Trains a model on the training data."""
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-
-    print("Epoch\tLoss\tDev acc")
-    for epoch in range(epochs):
-        epoch_loss = 0
-        for i, data in enumerate(train_loader):
-            sentences, labels, e1s, e2s, adj_matrices = data
-            optimizer.zero_grad()
-
-            output = model(sentences, adj_matrices, e1s, e2s)
-            loss = loss_fn(output, labels)
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip)
-            optimizer.step()
-
-            epoch_loss += loss.item() / len(sentences)
-
-        preds, golds = predict(model, dev_loader)
-        acc = accuracy_score(golds, preds)
-        print(f"{epoch + 1}\t{epoch_loss:.2f}\t{acc:.4f}")
-
-
-def predict(model, loader):
-    """Gets model predictions for unseen data."""
-    preds_list: list[torch.Tensor] = []
-    golds_list: list[torch.Tensor] = []
-
-    with torch.no_grad():
-        for sentences, labels, e1s, e2s, adj_matrices in loader:
-            output = model(sentences, adj_matrices, e1s, e2s)
-            preds = torch.argmax(output, dim=-1)
-            preds_list.append(preds.cpu().numpy())
-            golds_list.append(labels.cpu().numpy())
-
-    preds: np.ndarray = np.concatenate(preds_list)
-    golds: np.ndarray = np.concatenate(golds_list)
-
+def predict(net: NeuralNetClassifier, data: SemEvalDataset):
+    """Evaluates a trained model on a test set and displays the predictions in
+    a confusion matrix."""
+    print("Predicting on test set")
+    print("==================================")
+    preds = net.predict(data)
+    golds = np.array(data.labels)
     return preds, golds
 
 
@@ -113,7 +83,7 @@ def display_results(preds: np.ndarray, golds: np.ndarray):
               default='50', help="Dimensionality of embeddings")
 @click.option('--use-pretrained', is_flag=True,
               help="Use pretrained word embeddings")
-@click.option('--use_lstm', is_flag=True, help="Use LSTM encoder")
+@click.option('--use-lstm', is_flag=True, help="Use LSTM encoder")
 @click.option('--bidirectional', is_flag=True, help="Use BiLSTM")
 @click.option('--tune', is_flag=True,
               help="Perform a grid search over all models and hyperparameters")
@@ -127,19 +97,10 @@ def main(**kwargs):
     print("Loading train data...")
     train_data = SemEvalDataset(nlp)
     vocab = train_data.vocab
+    num_classes = train_data.num_classes
 
     print("Loading test data...")
     test_data = SemEvalDataset(nlp, split="test", vocab=vocab)
-
-    # split into train and dev
-    train_split = Subset(train_data, list(range(7000)))
-    dev_split = Subset(train_data, list(range(7000, 8000)))
-
-    # data loaders
-    collate_fn = CollateSemEval(kwargs["device"])
-    train_loader, dev_loader, test_loader = get_data_loaders(
-        train_split, dev_split, test_data, kwargs["batch_size"], collate_fn
-    )
 
     embed_dim = int(kwargs["embed_dim"])
     if kwargs["use_pretrained"]:
@@ -150,25 +111,33 @@ def main(**kwargs):
     else:
         pretrained = None
 
-    num_classes = len(set(train_data.labels))
-    model = GCNClassifier(
-        len(vocab),
-        embed_dim,
-        num_classes=num_classes,
-        dr=kwargs["dr"],
-        use_lstm=kwargs["use_lstm"],
-        pretrained=pretrained,
-        vocab=vocab
+    num_folds = kwargs["num_folds"]
+    collate_fn = CollateSemEval()
+
+    net = NeuralNetClassifier(
+        GCNClassifier,
+        module__emb_input_dim=len(vocab),
+        module__emb_output_dim=embed_dim,
+        module__num_classes=num_classes,
+        module__dr=kwargs["dr"],
+        module__use_lstm=kwargs["use_lstm"],
+        module__pretrained=pretrained,
+        module__vocab=vocab,
+        iterator_train__collate_fn=collate_fn,
+        iterator_valid__collate_fn=collate_fn,
+        train_split=None,
+        criterion=nn.CrossEntropyLoss,
+        optimizer=torch.optim.AdamW,
+        batch_size=kwargs["batch_size"],
+        lr=kwargs["lr"],
+        max_epochs=kwargs["epochs"],
+        callbacks=[GradientNormClipping(gradient_clip_value=kwargs["clip"])],
+        device=kwargs["device"]
     )
 
-    model = model.to(kwargs["device"])
-
-    epochs, lr, clip = kwargs["epochs"], kwargs["lr"], kwargs["clip"]
-    print("Training...")
-    train(model, train_loader, dev_loader, epochs, lr, clip)
+    net = run_model(net, train_data, num_folds)
+    preds, golds = predict(net, test_data)
     print()
-    print("Predicting on test set...")
-    preds, golds = predict(model, test_loader)
     display_results(preds, golds)
 
 

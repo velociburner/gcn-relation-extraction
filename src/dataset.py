@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -16,10 +16,10 @@ import deps
 @dataclass
 class SemEvalExample:
     sentence: torch.Tensor
-    label: int
     e1: tuple[int, int]
     e2: tuple[int, int]
     adj_matrix: torch.Tensor
+    label: int
 
 
 class SemEvalDataset(Dataset):
@@ -28,7 +28,8 @@ class SemEvalDataset(Dataset):
         self.name = "sem_eval_2010_task_8"
         self.nlp = nlp
         self.split = split
-        self.sentences, self.labels, self.entities, self.adj_matrices = self._get_data()
+        self.sentences, self.entities, self.adj_matrices, self.labels = self._get_data()
+        self.num_classes = len(set(self.labels))
 
         self.pad = "<pad>"
         self.unk = "<unk>"
@@ -71,7 +72,7 @@ class SemEvalDataset(Dataset):
             entities.append(entity_idxs)
             adj_matrices.append(adj_matrix)
 
-        return sentences, labels, entities, adj_matrices
+        return sentences, entities, adj_matrices, labels
 
     def _get_entity_idxs(self, tokens: list[str], matches: list[Any]):
         """Calculates the start and end indices of each entity in the list of
@@ -101,13 +102,13 @@ class SemEvalDataset(Dataset):
     def __len__(self):
         return len(self.sentences)
 
-    def __getitem__(self, idx):
-        sentence = torch.tensor(self.vocab(self.sentences[idx]))
-        label = self.labels[idx]
-        e1 = self.entities[idx][0]
-        e2 = self.entities[idx][1]
-        adj_matrix = self.adj_matrices[idx]
-        return SemEvalExample(sentence, label, e1, e2, adj_matrix)
+    def __getitem__(self, index):
+        sentence = torch.tensor(self.vocab(self.sentences[index]))
+        e1 = self.entities[index][0]
+        e2 = self.entities[index][1]
+        adj_matrix = self.adj_matrices[index]
+        label = self.labels[index]
+        return SemEvalExample(sentence, e1, e2, adj_matrix, label)
 
 
 class CollateSemEval:
@@ -115,20 +116,23 @@ class CollateSemEval:
     sequence to the longest sequence length in the batch and returns it, along
     with a tensor of labels and padded adjacency matrix of dependency arcs."""
 
-    def __init__(self, device: str, padding_value: float = 0.):
-        self.device = device
+    def __init__(self, padding_value: float = 0.):
         self.padding_value = padding_value
 
-    def __call__(self, examples: Iterable[SemEvalExample]):
+    def __call__(self, examples: list[SemEvalExample]):
+        # if the input includes explicit labels (by sklearn), discard them
+        if isinstance(examples[0], tuple):
+            examples = [example[0] for example in examples]
+
         sentences = nn.utils.rnn.pad_sequence(
             [example.sentence for example in examples],
             batch_first=True,
             padding_value=self.padding_value
         )
-        labels = torch.tensor([example.label for example in examples])
         e1s = torch.tensor([example.e1 for example in examples])
         e2s = torch.tensor([example.e2 for example in examples])
         adj_matrices = [example.adj_matrix for example in examples]
+        labels = torch.tensor([example.label for example in examples])
 
         # pad each adjacency matrix to the size of the largest one
         # each matrix is padded along both dimensions and remains a square matrix
@@ -142,9 +146,5 @@ class CollateSemEval:
             for matrix in adj_matrices
         ])
 
-        return (
-            sentences.to(self.device),
-            labels.to(self.device),
-            e1s.to(self.device), e2s.to(self.device),
-            padded_matrices.to(self.device)
-        )
+        inputs = sentences, e1s, e2s, padded_matrices
+        return inputs, labels
