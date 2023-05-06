@@ -109,6 +109,8 @@ def display_results(preds: np.ndarray, golds: np.ndarray, file="results.png"):
 
 
 @click.command()
+@click.option('--num-layers', type=int, default=3,
+              help="Number of layers in the GCN block")
 @click.option('--epochs', type=int, default=10,
               help="Number of training epochs")
 @click.option('--dr', type=float, default=0.5, help="Dropout value")
@@ -119,8 +121,7 @@ def display_results(preds: np.ndarray, golds: np.ndarray, file="results.png"):
               default='50', help="Dimensionality of embeddings")
 @click.option('--use-pretrained', is_flag=True,
               help="Use pretrained word embeddings")
-@click.option('--use-lstm', is_flag=True, help="Use LSTM encoder")
-@click.option('--bidirectional', is_flag=True, help="Use BiLSTM")
+@click.option('--use-lstm', is_flag=True, help="Use BiLSTM encoder")
 @click.option('--tune', is_flag=True,
               help="Perform a grid search over all models and hyperparameters")
 @click.option('--num-folds', type=int, default=10,
@@ -151,6 +152,7 @@ def main(**kwargs):
         GCNClassifier,
         module__emb_input_dim=len(vocab),
         module__emb_output_dim=embed_dim,
+        module__num_layers=kwargs["num_layers"],
         module__num_classes=num_classes,
         module__dr=kwargs["dr"],
         module__use_lstm=kwargs["use_lstm"],
