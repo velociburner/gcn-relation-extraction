@@ -1,1 +1,4 @@
 __pycache__
+.vector_cache
+*.pt
+*.png
